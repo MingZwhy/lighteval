@@ -413,6 +413,19 @@ class VLLMModel(LightevalModel):
 
         return dataset.get_original_order(results)
 
+    # [ExpertPruning-mod] vLLM 0.10+ 删除了 `LLM.generate(prompt_token_ids=...)`
+    # 这个 kwarg，改为统一走 `prompts=` + `TokensPrompt`。我们锁的 vllm==0.10.2
+    # 属于新 API，如果不做 wrap 会直接抛
+    #   TypeError: LLM.generate() got an unexpected keyword argument 'prompt_token_ids'
+    # 包一层兜底：import 不到 TokensPrompt 时（很老的 vllm）就按原样返回。
+    @staticmethod
+    def _to_vllm_prompts(inputs: list[list[int]]):
+        try:
+            from vllm.inputs import TokensPrompt
+        except ImportError:
+            return inputs
+        return [TokensPrompt(prompt_token_ids=ids) for ids in inputs]
+
     def _generate(
         self,
         inputs: list[list[int]],
@@ -445,11 +458,14 @@ class VLLMModel(LightevalModel):
             @ray.remote(num_gpus=self.tensor_parallel_size)
             def run_inference_one_model(model_args: dict, sampling_params: SamplingParams, requests):
                 llm = LLM(**model_args)
-                return llm.generate(prompt_token_ids=requests, sampling_params=sampling_params)
+                # [ExpertPruning-mod] 同上：包成 TokensPrompt 以兼容 vLLM 0.10+。
+                return llm.generate(requests, sampling_params=sampling_params)
 
             # dispatch requests to all self.data_parallel_size workers, in interleaved fashion
             # interleaved important to balance context lengths across workers
-            requests = [list(x) for x in distribute(self.data_parallel_size, inputs)]
+            # [ExpertPruning-mod] 先 wrap 成 TokensPrompt，再做 data-parallel 切分。
+            wrapped = self._to_vllm_prompts(inputs)
+            requests = [list(x) for x in distribute(self.data_parallel_size, wrapped)]
             inputs = ((self.model_args, sampling_params, req) for req in requests)
             object_refs = [run_inference_one_model.remote(*x) for x in inputs]
             results = ray.get(object_refs)
@@ -462,8 +478,9 @@ class VLLMModel(LightevalModel):
                 if x is not None
             ]
         else:
+            # [ExpertPruning-mod] 把 token-id list 包成 TokensPrompt（vllm 0.10+ API）。
             outputs = self.model.generate(
-                prompt_token_ids=inputs,
+                self._to_vllm_prompts(inputs),
                 sampling_params=sampling_params,
                 use_tqdm=True,
             )
