@@ -23,4 +23,9 @@
 import importlib.metadata
 
 
-__version__ = importlib.metadata.version(__package__ or __name__)
+# [ExpertPruning-mod] 未通过 pip 安装 lighteval（例如直接从源码 sys.path 注入）时，
+# importlib.metadata.version 会抛 PackageNotFoundError；回退到本地版本号以保证可导入。
+try:
+    __version__ = importlib.metadata.version(__package__ or __name__)
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "0.13.0+expert-pruning"

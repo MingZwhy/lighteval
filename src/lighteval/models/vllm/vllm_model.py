@@ -168,6 +168,11 @@ class VLLMModelConfig(ModelConfig):
     quantization: str | None = None
     load_format: str | None = None
     swap_space: PositiveInt = 4  # CPU swap space size (GiB) per GPU.
+    # [ExpertPruning-mod] 暴露 cpu_offload_gb / enforce_eager 两个字段，方便在 CLI
+    # 里通过 --cpu_offload_gb / --enforce_eager 控制（upstream 里 enforce_eager
+    # 被硬编码为 True，cpu_offload_gb 则完全没暴露）。
+    cpu_offload_gb: float = 0
+    enforce_eager: bool = False
     seed: NonNegativeInt = 1234
     trust_remote_code: bool = False
     add_special_tokens: bool = True
@@ -260,10 +265,13 @@ class VLLMModel(LightevalModel):
             "pipeline_parallel_size": config.pipeline_parallel_size,
             "max_model_len": self._max_length,
             "swap_space": 4,
+            # [ExpertPruning-mod] forward cpu_offload_gb so users can trade speed for memory.
+            "cpu_offload_gb": config.cpu_offload_gb,
             "seed": int(config.seed),
             "max_num_seqs": int(config.max_num_seqs),
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
-            "enforce_eager": True,
+            # [ExpertPruning-mod] use the configurable enforce_eager field (upstream hard-codes True).
+            "enforce_eager": config.enforce_eager,
         }
 
         if config.quantization is not None:
@@ -565,10 +573,13 @@ class AsyncVLLMModel(VLLMModel):
             "pipeline_parallel_size": config.pipeline_parallel_size,
             "max_model_len": self._max_length,
             "swap_space": 4,
+            # [ExpertPruning-mod] forward cpu_offload_gb so users can trade speed for memory.
+            "cpu_offload_gb": config.cpu_offload_gb,
             "seed": int(config.seed),
             "max_num_seqs": int(config.max_num_seqs),
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
-            "enforce_eager": True,
+            # [ExpertPruning-mod] use the configurable enforce_eager field (upstream hard-codes True).
+            "enforce_eager": config.enforce_eager,
         }
 
         if config.data_parallel_size > 1:

@@ -512,6 +512,10 @@ class AlphabetLoopChecker(Instruction):
         """Checks if each word of the response starts with the next letter of the alphabet."""
         value = value.translate(str.maketrans("", "", string.punctuation))
         words = value.strip("".join(string.punctuation) + " ").split()
+        # [ExpertPruning-mod] 当生成被完全剥离为空（纯标点 / 空回答）时直接判 False，
+        # 避免 words[0] 抛 IndexError 把整条 ifbench 管道崩掉。
+        if not words:
+            return False
         alphabet = string.ascii_lowercase
         correct_letter = words[0][0].lower()
         if correct_letter not in alphabet:  # numbers are fails
@@ -1252,6 +1256,10 @@ class ParagraphLastFirstWordMatchChecker(Instruction):
             if not paragraph:
                 continue
             words = paragraph.strip("".join(string.punctuation) + " ").split()
+            # [ExpertPruning-mod] 纯标点 / 空段落时 words 为空，直接跳过，
+            # 否则 words[0] / words[-1] 会抛 IndexError。
+            if not words:
+                continue
             if words[0] != words[-1]:
                 return False
         return True

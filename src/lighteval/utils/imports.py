@@ -63,7 +63,23 @@ def is_package_available(package: str | Requirement | Extra):
         if not package.specifier:
             return True
 
-        return installed in package.specifier
+        # [ExpertPruning-mod] 放宽版本约束：只要 package 能被 import（已有 installed
+        # 版本号），就认为可用，忽略 pyproject.toml 里的版本区间。本仓库用
+        # `vllm==0.10.2` 搭配 lighteval 0.13.0（其 pyproject 中写的是
+        # `vllm>=0.10.0,<0.10.2`），原逻辑会直接返回 False 从而触发
+        # `raise_if_package_not_available` 把 VLLMModel 换成 DummyObject；
+        # 对我们的用途来说 VLLMModelConfig 接口在 0.10.x 上基本兼容，硬卡版本意义不大。
+        if installed not in package.specifier:
+            import warnings
+
+            warnings.warn(
+                f"[ExpertPruning-mod] Installed version of `{package.name}` "
+                f"({installed}) does not satisfy constraint `{package}`, but "
+                f"we still treat it as available. If you hit runtime errors, "
+                f"consider aligning versions.",
+                stacklevel=2,
+            )
+        return True
 
 
 @lru_cache()
