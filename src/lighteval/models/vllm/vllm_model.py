@@ -25,7 +25,7 @@ import gc
 import itertools
 import logging
 import os
-from typing import Coroutine, Optional
+from typing import Any, Coroutine, Optional
 
 import torch
 from pydantic import NonNegativeFloat, NonNegativeInt, PositiveInt
@@ -173,6 +173,7 @@ class VLLMModelConfig(ModelConfig):
     # 被硬编码为 True，cpu_offload_gb 则完全没暴露）。
     cpu_offload_gb: float = 0
     enforce_eager: bool = False
+    compilation_config: dict[str, Any] | None = None
     seed: NonNegativeInt = 1234
     trust_remote_code: bool = False
     add_special_tokens: bool = True
@@ -273,6 +274,8 @@ class VLLMModel(LightevalModel):
             # [ExpertPruning-mod] use the configurable enforce_eager field (upstream hard-codes True).
             "enforce_eager": config.enforce_eager,
         }
+        if config.compilation_config is not None:
+            self.model_args["compilation_config"] = config.compilation_config
 
         if config.quantization is not None:
             self.model_args["quantization"] = config.quantization
