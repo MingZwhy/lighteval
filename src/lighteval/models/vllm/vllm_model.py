@@ -168,12 +168,13 @@ class VLLMModelConfig(ModelConfig):
     quantization: str | None = None
     load_format: str | None = None
     swap_space: PositiveInt = 4  # CPU swap space size (GiB) per GPU.
-    # [ExpertPruning-mod] 暴露 cpu_offload_gb / enforce_eager 两个字段，方便在 CLI
-    # 里通过 --cpu_offload_gb / --enforce_eager 控制（upstream 里 enforce_eager
-    # 被硬编码为 True，cpu_offload_gb 则完全没暴露）。
+    # [ExpertPruning-mod] Expose a few vLLM runtime knobs used by local
+    # experiments. Upstream hard-codes enforce_eager in this wrapper and does
+    # not surface cpu_offload_gb / disable_custom_all_reduce here.
     cpu_offload_gb: float = 0
     enforce_eager: bool = False
     compilation_config: dict[str, Any] | None = None
+    disable_custom_all_reduce: bool = False
     seed: NonNegativeInt = 1234
     trust_remote_code: bool = False
     add_special_tokens: bool = True
@@ -273,6 +274,7 @@ class VLLMModel(LightevalModel):
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
             # [ExpertPruning-mod] use the configurable enforce_eager field (upstream hard-codes True).
             "enforce_eager": config.enforce_eager,
+            "disable_custom_all_reduce": config.disable_custom_all_reduce,
         }
         if config.compilation_config is not None:
             self.model_args["compilation_config"] = config.compilation_config
@@ -600,6 +602,7 @@ class AsyncVLLMModel(VLLMModel):
             "max_num_batched_tokens": int(config.max_num_batched_tokens),
             # [ExpertPruning-mod] use the configurable enforce_eager field (upstream hard-codes True).
             "enforce_eager": config.enforce_eager,
+            "disable_custom_all_reduce": config.disable_custom_all_reduce,
         }
 
         if config.data_parallel_size > 1:

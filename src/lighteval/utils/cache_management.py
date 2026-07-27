@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, List, Set, Tuple, Union
@@ -41,6 +42,16 @@ from lighteval.utils.utils import as_list
 
 
 logger = logging.getLogger(__name__)
+
+
+def _model_cache_namespace(model_name: str) -> str:
+    """Return a stable relative cache directory for any model identifier."""
+    normalized = str(model_name).strip()
+    readable = re.sub(r"[^A-Za-z0-9._-]+", "--", normalized).strip("-._")
+    if not readable:
+        readable = "model"
+    digest = hashlib.sha256(normalized.encode()).hexdigest()[:12]
+    return f"{readable[:96]}-{digest}"
 
 
 @dataclass
@@ -83,8 +94,11 @@ class SampleCache:
         self.model_config = model_config
         self.model_hash = self.get_model_hash(model_config)
 
+        cache_root = Path(os.path.expanduser(self.model_config.cache_dir))
         self.cache_dir = (
-            Path(os.path.expanduser(self.model_config.cache_dir)) / self.model_config.model_name / self.model_hash
+            cache_root
+            / _model_cache_namespace(self.model_config.model_name)
+            / self.model_hash
         )
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 

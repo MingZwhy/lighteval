@@ -101,6 +101,32 @@ class TestCaching(unittest.TestCase):
                     self.assertIn(str(temp_dir), str(folder))
                     self.assertIn(model_name, str(folder))
 
+    def test_absolute_model_path_stays_inside_cache_root(self):
+        """An absolute model path must not override the configured cache root."""
+        from lighteval.models.vllm.vllm_model import VLLMModelConfig
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = VLLMModelConfig(
+                model_name="/models/local/Qwen3-30B-A3B-Instruct-2507",
+                cache_dir=temp_dir,
+            )
+            cache = SampleCache(config)
+
+            self.assertTrue(cache.cache_dir.is_relative_to(temp_dir))
+
+    def test_absolute_model_paths_with_same_basename_do_not_collide(self):
+        from lighteval.models.vllm.vllm_model import VLLMModelConfig
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first = SampleCache(
+                VLLMModelConfig(model_name="/models/a/model", cache_dir=temp_dir)
+            )
+            second = SampleCache(
+                VLLMModelConfig(model_name="/models/b/model", cache_dir=temp_dir)
+            )
+
+            self.assertNotEqual(first.cache_dir, second.cache_dir)
+
     def test_cache_decorator_presence(self):
         """Test that @cached decorators are present on the right methods."""
         from lighteval.models.dummy.dummy_model import DummyModel
