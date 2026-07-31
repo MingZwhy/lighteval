@@ -22,13 +22,14 @@
 
 import functools
 import hashlib
+import inspect
 import json
 import logging
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields as dataclass_fields, is_dataclass
 from pathlib import Path
-from typing import Callable, List, Set, Tuple, Union
+from typing import Any, Callable, List, Set, Tuple, Union
 
 import pandas as pd
 from datasets import Dataset, load_dataset
@@ -42,6 +43,73 @@ from lighteval.utils.utils import as_list
 
 
 logger = logging.getLogger(__name__)
+
+
+# [ExpertPruning-mod] Fields that legitimately change between runs of the same task.
+_TASK_FINGERPRINT_IGNORED_FIELDS = frozenset({"original_num_docs", "effective_num_docs"})
+_MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-f]+", re.IGNORECASE)
+_TASK_FINGERPRINT_MAX_DEPTH = 4
+
+
+def _describe_callable(value: Callable, depth: int) -> str:
+    """Describe a callable by identity *and* body, never by memory address."""
+    parts = [str(getattr(value, "__module__", "")), str(getattr(value, "__qualname__", ""))]
+    try:
+        parts.append(inspect.getsource(value))
+    except (OSError, TypeError):
+        pass
+    # Closure cells hold the interesting configuration: prompt templates, few-shot
+    # counts, sampling options. Without them, editing a template would not be visible.
+    for cell in getattr(value, "__closure__", None) or ():
+        try:
+            parts.append(_describe_value(cell.cell_contents, depth + 1))
+        except ValueError:
+            continue
+    return "callable(" + "|".join(parts) + ")"
+
+
+def _describe_value(value: Any, depth: int = 0) -> str:
+    """Render a value so that equal configurations always produce equal strings."""
+    if depth > _TASK_FINGERPRINT_MAX_DEPTH:
+        return "..."
+    if isinstance(value, (str, bytes, bool, int, float, type(None))):
+        return repr(value)
+    if isinstance(value, functools.partial):
+        bound = [f"{k}={_describe_value(v, depth + 1)}" for k, v in sorted(value.keywords.items())]
+        return ("partial("
+                + "|".join([_describe_value(value.func, depth + 1)]
+                           + [_describe_value(a, depth + 1) for a in value.args]
+                           + bound)
+                + ")")
+    if isinstance(value, dict):
+        items = sorted((repr(k), _describe_value(v, depth + 1)) for k, v in value.items())
+        return "{" + ",".join(f"{k}:{v}" for k, v in items) + "}"
+    if isinstance(value, (set, frozenset)):
+        return "{" + ",".join(sorted(_describe_value(v, depth + 1) for v in value)) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(_describe_value(v, depth + 1) for v in value) + "]"
+    if is_dataclass(value) and not isinstance(value, type):
+        return _describe_value(
+            {f.name: getattr(value, f.name, None) for f in dataclass_fields(value)}, depth + 1)
+    if callable(value):
+        return _describe_callable(value, depth)
+    return _MEMORY_ADDRESS_RE.sub("", repr(value))
+
+
+def task_config_fingerprint(config: LightevalTaskConfig) -> str:
+    """Stable, content-aware rendering of a task config, used for the sample-cache key.
+
+    ``LightevalTaskConfig.__str__`` renders callables through ``repr``, which embeds the
+    object's memory address, so the task hash differed on every process and the sample
+    cache could never be reused. It also collapsed callables to their bare ``__name__``,
+    so editing a prompt template or a metric's bound arguments silently kept replaying
+    generations produced by the previous version.
+    """
+    return _describe_value({
+        field.name: getattr(config, field.name, None)
+        for field in dataclass_fields(config)
+        if field.name not in _TASK_FINGERPRINT_IGNORED_FIELDS
+    })
 
 
 def _model_cache_namespace(model_name: str) -> str:
@@ -190,7 +258,9 @@ class SampleCache:
 
             task_configs: list[LightevalTaskConfig] = self.registry.task_to_configs[task_name]
             # Use deterministic ordering based on string repr
-            config_strs = sorted([cfg.__str__(lite=True) for cfg in task_configs])
+            # [ExpertPruning-mod] fingerprint the config content instead of its __str__,
+            # which embedded memory addresses and hid callable bodies.
+            config_strs = sorted(task_config_fingerprint(cfg) for cfg in task_configs)
             config_str = "|".join(config_strs)
             task_hash = hashlib.sha256(config_str.encode()).hexdigest()[:16]
             self._task_hashes[full_task_name] = task_hash
