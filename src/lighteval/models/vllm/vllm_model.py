@@ -52,7 +52,13 @@ if is_package_available("vllm"):
         destroy_distributed_environment,
         destroy_model_parallel,
     )
-    from vllm.transformers_utils.tokenizer import get_tokenizer
+    # [ExpertPruning-mod] vLLM 0.28 moved the tokenizer factory out of
+    # transformers_utils. Probe both so one checkout serves the editable
+    # v0.10.2 pruning environment and the released 0.28 Fixed-K environment.
+    try:
+        from vllm.transformers_utils.tokenizer import get_tokenizer
+    except ModuleNotFoundError:
+        from vllm.tokenizers.registry import get_tokenizer
     from vllm.v1.engine.async_llm import AsyncEngineArgs, AsyncLLM
 
     logging.getLogger("vllm").propagate = True
@@ -266,7 +272,9 @@ class VLLMModel(LightevalModel):
             "tensor_parallel_size": config.tensor_parallel_size,
             "pipeline_parallel_size": config.pipeline_parallel_size,
             "max_model_len": self._max_length,
-            "swap_space": 4,
+            # [ExpertPruning-mod] swap_space was dropped from the vLLM 0.28
+            # engine args; omitting it keeps the old default of 4 GiB, so this
+            # is behaviour-preserving on v0.10.2 and required on 0.28.
             # [ExpertPruning-mod] forward cpu_offload_gb so users can trade speed for memory.
             "cpu_offload_gb": config.cpu_offload_gb,
             "seed": int(config.seed),
@@ -594,7 +602,9 @@ class AsyncVLLMModel(VLLMModel):
             "data_parallel_size": config.data_parallel_size,
             "pipeline_parallel_size": config.pipeline_parallel_size,
             "max_model_len": self._max_length,
-            "swap_space": 4,
+            # [ExpertPruning-mod] swap_space was dropped from the vLLM 0.28
+            # engine args; omitting it keeps the old default of 4 GiB, so this
+            # is behaviour-preserving on v0.10.2 and required on 0.28.
             # [ExpertPruning-mod] forward cpu_offload_gb so users can trade speed for memory.
             "cpu_offload_gb": config.cpu_offload_gb,
             "seed": int(config.seed),
