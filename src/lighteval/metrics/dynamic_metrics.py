@@ -219,7 +219,16 @@ class MultilingualExtractiveMatchMetric(SampleLevelComputation):
 
     def compute(self, doc: Doc, model_response: ModelResponse) -> float:
         golds = doc.get_golds()
-        predictions = model_response.final_text
+        # [ExpertPruning-mod] Heavily pruned models can degenerate into
+        # multi-megabyte repetitive output. The extraction regexes are
+        # backtracking-heavy, so scoring such a sample can hang for hours. Our
+        # prompts require the final answer on the last line, so bounding the
+        # tail is answer-preserving for well-formed generations.
+        _TAIL = 32768
+        predictions = [
+            p[-_TAIL:] if isinstance(p, str) and len(p) > _TAIL else p
+            for p in model_response.final_text
+        ]
 
         gold_extraction_regexes = get_extraction_regexes(doc, self.gold_extraction_target, self.language)
         pred_extraction_regexes = get_extraction_regexes(doc, self.pred_extraction_target, self.language)
