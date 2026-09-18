@@ -44,6 +44,7 @@ from lighteval.tasks.registry import Registry
 from lighteval.tasks.requests import SamplingMethod
 from lighteval.utils.imports import is_package_available
 from lighteval.utils.parallelism import test_all_gather
+from lighteval.utils.sample_sharding import select_sample_shard
 from lighteval.utils.utils import make_results_table, remove_reasoning_tags
 
 
@@ -89,6 +90,11 @@ class PipelineParameters:
     custom_tasks_directory: str | None = None
     num_fewshot_seeds: int = 1
     max_samples: int | None = None
+    # [ExpertPruning-mod] Split a task's documents across independent workers by
+    # their original dataset index, so a long sweep can be run in parallel and
+    # the shards pooled back into exactly the unsharded result.
+    sample_shard_id: int | None = None
+    sample_num_shards: int | None = None
     cot_prompt: str | None = None
     remove_reasoning_tags: bool = True
     reasoning_tags: str | list[tuple[str, str]] = "[('<think>', '</think>')]"
@@ -97,6 +103,22 @@ class PipelineParameters:
     load_tasks_multilingual: bool = False
 
     def __post_init__(self):  # noqa C901
+        # [ExpertPruning-mod] validate the sharding pair before anything loads
+        if (self.sample_shard_id is None) != (self.sample_num_shards is None):
+            raise ValueError(
+                "sample_shard_id and sample_num_shards must be set together"
+            )
+        if self.sample_num_shards is not None:
+            if self.max_samples is not None:
+                raise ValueError(
+                    "sample sharding is incompatible with max_samples truncation"
+                )
+            if self.sample_num_shards < 1:
+                raise ValueError("sample_num_shards must be >= 1")
+            if not 0 <= self.sample_shard_id < self.sample_num_shards:
+                raise ValueError(
+                    "sample_shard_id must satisfy 0 <= id < sample_num_shards"
+                )
         if not isinstance(self.reasoning_tags, list):
             try:
                 self.reasoning_tags = ast.literal_eval(self.reasoning_tags)
@@ -223,6 +245,19 @@ class Pipeline:
         self.documents_dict = {
             task.full_name: task.get_docs(self.pipeline_parameters.max_samples) for _, task in self.tasks_dict.items()
         }
+        # [ExpertPruning-mod] Keep only this shard's documents. Filtering after
+        # get_docs preserves lighteval's own deterministic ordering, and the
+        # filter key is the immutable original dataset index, so shards are
+        # disjoint and their union is the full task.
+        if self.pipeline_parameters.sample_num_shards is not None:
+            self.documents_dict = {
+                task_name: select_sample_shard(
+                    docs,
+                    self.pipeline_parameters.sample_shard_id,
+                    self.pipeline_parameters.sample_num_shards,
+                )
+                for task_name, docs in self.documents_dict.items()
+            }
 
         self.sampling_docs = collections.defaultdict(list)
         for _, docs in self.documents_dict.items():
