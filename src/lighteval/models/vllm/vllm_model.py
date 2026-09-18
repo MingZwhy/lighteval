@@ -66,6 +66,41 @@ if is_package_available("vllm"):
 
     logging.getLogger("ray").propagate = True
     logging.getLogger("ray").handlers.clear()
+
+    # [ExpertPruning-mod] The engine argument surface differs between the pinned
+    # v0.10.2 that the pruning environment keeps editable and the current release
+    # used for newer MoE checkpoints: language_model_only and swap_space are the
+    # ones that moved. Filtering against the installed signature lets one
+    # checkout drive both engines instead of maintaining a second branch.
+    def _engine_arg_names():
+        import inspect
+
+        for path, attr in (
+            ("vllm.engine.arg_utils", "EngineArgs"),
+            ("vllm.config", "EngineArgs"),
+        ):
+            try:
+                module = __import__(path, fromlist=[attr])
+                params = inspect.signature(getattr(module, attr).__init__).parameters
+            except Exception:  # noqa: BLE001 - any failure means "do not filter"
+                continue
+            if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+                # Accepts **kwargs, so we cannot tell what is supported.
+                return None
+            return set(params)
+        return None
+
+    def _drop_unsupported_engine_args(model_args: dict) -> dict:
+        accepted = _engine_arg_names()
+        if accepted is None:
+            return model_args
+        dropped = sorted(k for k in model_args if k not in accepted)
+        if dropped:
+            logger.info(
+                "[ExpertPruning-mod] installed vLLM does not accept %s; dropping",
+                ", ".join(dropped),
+            )
+        return {k: v for k, v in model_args.items() if k in accepted}
 else:
     from unittest.mock import Mock
 
@@ -73,6 +108,9 @@ else:
         destroy_model_parallel
     ) = Mock()
     AsyncLLM = AsyncEngineArgs = RequestOutput = Mock()
+
+    def _drop_unsupported_engine_args(model_args: dict) -> dict:
+        return model_args
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -181,6 +219,10 @@ class VLLMModelConfig(ModelConfig):
     enforce_eager: bool = False
     compilation_config: dict[str, Any] | None = None
     disable_custom_all_reduce: bool = False
+    language_model_only: bool = False
+    kv_cache_dtype: str = "auto"
+    block_size: PositiveInt | None = None
+    enable_expert_parallel: bool = False
     seed: NonNegativeInt = 1234
     trust_remote_code: bool = False
     add_special_tokens: bool = True
@@ -283,7 +325,12 @@ class VLLMModel(LightevalModel):
             # [ExpertPruning-mod] use the configurable enforce_eager field (upstream hard-codes True).
             "enforce_eager": config.enforce_eager,
             "disable_custom_all_reduce": config.disable_custom_all_reduce,
+            "language_model_only": config.language_model_only,
+            "kv_cache_dtype": config.kv_cache_dtype,
+            "enable_expert_parallel": config.enable_expert_parallel,
         }
+        if config.block_size is not None:
+            self.model_args["block_size"] = config.block_size
         if config.compilation_config is not None:
             self.model_args["compilation_config"] = config.compilation_config
 
@@ -291,6 +338,8 @@ class VLLMModel(LightevalModel):
             self.model_args["quantization"] = config.quantization
         if config.load_format is not None:
             self.model_args["load_format"] = config.load_format
+
+        self.model_args = _drop_unsupported_engine_args(self.model_args)
 
         if config.data_parallel_size > 1:
             self.model_args["distributed_executor_backend"] = "ray"
@@ -613,7 +662,14 @@ class AsyncVLLMModel(VLLMModel):
             # [ExpertPruning-mod] use the configurable enforce_eager field (upstream hard-codes True).
             "enforce_eager": config.enforce_eager,
             "disable_custom_all_reduce": config.disable_custom_all_reduce,
+            "language_model_only": config.language_model_only,
+            "kv_cache_dtype": config.kv_cache_dtype,
+            "enable_expert_parallel": config.enable_expert_parallel,
         }
+        if config.block_size is not None:
+            self.model_args["block_size"] = config.block_size
+
+        self.model_args = _drop_unsupported_engine_args(self.model_args)
 
         if config.data_parallel_size > 1:
             self._batch_size = "auto"
