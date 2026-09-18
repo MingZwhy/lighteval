@@ -29,6 +29,15 @@ from dataclasses import asdict, dataclass, field
 import git
 import xxhash
 
+
+# [ExpertPruning-mod] xxhash >= 3.6 rejects str and raises
+# "TypeError: Strings must be encoded before hashing". lighteval passes text at
+# every call site here, which used to work on older xxhash. Encoding as UTF-8
+# reproduces exactly the bytes the permissive versions hashed, so recorded
+# digests are unchanged -- this is a compatibility fix, not a new hash.
+def _xxh64_text(text: str):
+    return xxhash.xxh64(text.encode("utf-8") if isinstance(text, str) else text)
+
 from lighteval.metrics.utils.stderr import get_stderr_function
 from lighteval.models.abstract_model import ModelConfig
 from lighteval.models.model_output import ModelResponse
@@ -269,25 +278,25 @@ class DetailsLogger:
         self.details[task_name].append(detail)
 
         hash = self.Hash()
-        hash.example = xxhash.xxh64(doc.query).hexdigest()
-        hash.input_tokens = xxhash.xxh64(str(model_response.input_tokens)).hexdigest()
-        hash.cont_tokens = xxhash.xxh64(str(model_response.output_tokens)).hexdigest()
+        hash.example = _xxh64_text(doc.query).hexdigest()
+        hash.input_tokens = _xxh64_text(str(model_response.input_tokens)).hexdigest()
+        hash.cont_tokens = _xxh64_text(str(model_response.output_tokens)).hexdigest()
         self.hashes[task_name].append(hash)
 
     def aggregate(self):
         """Hashes the details for each task and then for all tasks."""
         for task_name in self.hashes:
             compiled_hash = self.CompiledHash()
-            compiled_hash.hash_examples = xxhash.xxh64(
+            compiled_hash.hash_examples = _xxh64_text(
                 "".join(sorted(q.example for q in self.hashes[task_name]))
             ).hexdigest()  # hash of all the hash - sorted for reproducibility
-            compiled_hash.hash_full_prompts = xxhash.xxh64(
+            compiled_hash.hash_full_prompts = _xxh64_text(
                 "".join(sorted(q.full_prompt for q in self.hashes[task_name]))
             ).hexdigest()  # hash of all the hash - sorted for reproducibility
-            compiled_hash.hash_input_tokens = xxhash.xxh64(
+            compiled_hash.hash_input_tokens = _xxh64_text(
                 "".join(sorted(q.input_tokens for q in self.hashes[task_name]))
             ).hexdigest()  # hash of all the hash - sorted for reproducibility
-            compiled_hash.hash_cont_tokens = xxhash.xxh64(
+            compiled_hash.hash_cont_tokens = _xxh64_text(
                 "".join(sorted(q.cont_tokens for q in self.hashes[task_name]))
             ).hexdigest()  # hash of all the hash - sorted for reproducibility
             self.compiled_hashes[task_name] = compiled_hash
@@ -298,7 +307,7 @@ class DetailsLogger:
         hash_types: list[str] = list(self.compiled_details.values())[0].hashes.keys()
 
         for hash_type in hash_types:
-            self.compiled_details_over_all_tasks.hashes[hash_type] = xxhash.xxh64(
+            self.compiled_details_over_all_tasks.hashes[hash_type] = _xxh64_text(
                 "".join(
                     compiled_detail.hashes[hash_type] for _, compiled_detail in sorted(self.compiled_details.items())
                 )
